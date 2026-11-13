@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -13,6 +14,8 @@ enum Prefs {
     static let groupThreads = "groupThreads"              // Bool, default true
     static let sidebarMode = "sidebarMode"                // "all" | "simple"
 
+    static let appearance = "appearance"                  // AppearanceMode raw value, default "system"
+
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             refreshMinutes: 2,
@@ -23,6 +26,7 @@ enum Prefs {
             showTodayPanel: false,
             groupThreads: true,
             sidebarMode: "all",
+            appearance: AppearanceMode.system.rawValue,
         ])
     }
 
@@ -78,4 +82,33 @@ enum Notifier {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
     }
+}
+
+
+/// Light / dark / follow the Mac. Applied app-wide (all windows, Settings and message bodies).
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: "System default"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+
+    static var saved: AppearanceMode {
+        AppearanceMode(rawValue: UserDefaults.standard.string(forKey: Prefs.appearance) ?? "") ?? .system
+    }
+
+    @MainActor static func applySaved() { NSApp.appearance = saved.nsAppearance }
 }

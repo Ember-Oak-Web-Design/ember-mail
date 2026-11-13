@@ -368,10 +368,11 @@ private struct GeneralSettings: View {
     @State private var notifyNewMail = Self.bool(Prefs.notifyNewMail, true)
     @State private var groupThreads = Self.bool(Prefs.groupThreads, true)
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var appearance = AppearanceMode.saved
     @State private var saved = GeneralSettings.current()
     @State private var loginError: String?
 
-    private struct Values: Equatable { var minutes: Int; var images: Bool; var notify: Bool; var group: Bool; var login: Bool }
+    private struct Values: Equatable { var minutes: Int; var images: Bool; var notify: Bool; var group: Bool; var login: Bool; var appearance: AppearanceMode }
 
     private static func int(_ key: String, _ fallback: Int) -> Int {
         UserDefaults.standard.object(forKey: key) as? Int ?? fallback
@@ -382,15 +383,19 @@ private struct GeneralSettings: View {
     private static func current() -> Values {
         Values(minutes: int(Prefs.refreshMinutes, 2), images: bool(Prefs.loadRemoteImages, true),
                notify: bool(Prefs.notifyNewMail, true), group: bool(Prefs.groupThreads, true),
-               login: SMAppService.mainApp.status == .enabled)
+               login: SMAppService.mainApp.status == .enabled, appearance: AppearanceMode.saved)
     }
     private var draft: Values {
-        Values(minutes: refreshMinutes, images: loadRemoteImages, notify: notifyNewMail, group: groupThreads, login: openAtLogin)
+        Values(minutes: refreshMinutes, images: loadRemoteImages, notify: notifyNewMail, group: groupThreads, login: openAtLogin, appearance: appearance)
     }
 
     var body: some View {
         VStack(spacing: 0) {
         Form {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppearanceMode.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
             Toggle("Group messages by conversation", isOn: $groupThreads)
             Toggle("Open Ember Mail at login", isOn: $openAtLogin)
             Text("Scheduled emails are sent by Ember Mail itself, so keep it open (closing the window is fine). Opening at login makes sure nothing is missed.")
@@ -433,6 +438,8 @@ private struct GeneralSettings: View {
         d.set(loadRemoteImages, forKey: Prefs.loadRemoteImages)
         d.set(notifyNewMail, forKey: Prefs.notifyNewMail)
         d.set(groupThreads, forKey: Prefs.groupThreads)
+        d.set(appearance.rawValue, forKey: Prefs.appearance)
+        AppearanceMode.applySaved()
         if openAtLogin != (SMAppService.mainApp.status == .enabled) {
             do {
                 if openAtLogin { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
@@ -447,7 +454,7 @@ private struct GeneralSettings: View {
 
     private func revert() {
         refreshMinutes = saved.minutes; loadRemoteImages = saved.images; notifyNewMail = saved.notify
-        groupThreads = saved.group; openAtLogin = saved.login
+        groupThreads = saved.group; openAtLogin = saved.login; appearance = saved.appearance
     }
 }
 
