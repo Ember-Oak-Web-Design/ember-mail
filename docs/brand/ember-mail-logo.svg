@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="512" height="512" role="img" aria-label="Ember Mail">
+  <defs>
+    <linearGradient id="bg" x1="0.45" y1="0" x2="0.55" y2="1"><stop offset="0" stop-color="#4D3020"/><stop offset="1" stop-color="#21160F"/></linearGradient>
+    <radialGradient id="glow" cx="512" cy="574" r="400" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F27330" stop-opacity=".38"/><stop offset="1" stop-color="#F27330" stop-opacity="0"/></radialGradient>
+    <linearGradient id="fire" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFC75C"/><stop offset=".5" stop-color="#FA8533"/><stop offset="1" stop-color="#DB5224"/></linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
+  <path fill="url(#fire)" d="M512 196C560 300 706 380 706 548C706 680 624 770 512 810C400 770 318 680 318 548C318 470 352 420 402 372C402 430 428 482 468 500C430 380 452 270 512 196Z"/>
+  <path d="M372 590L512 692L652 590" fill="none" stroke="#291A12" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

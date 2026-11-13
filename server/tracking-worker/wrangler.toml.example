@@ -1,0 +1,25 @@
+name = "ember-receipts"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Copy to wrangler.toml (gitignored) and fill in.
+
+# Serve on its own subdomain so it never touches the Astro site's Worker.
+# Wrangler creates the DNS record and SSL certificate on deploy.
+routes = [
+  { pattern = "t.example.com", custom_domain = true }
+]
+workers_dev = false
+
+# Public OAuth client id (not a secret). The client SECRET is a Worker secret:
+#   npx wrangler secret put GOOGLE_CLIENT_SECRET
+[vars]
+GOOGLE_CLIENT_ID = "1234567890-abc.apps.googleusercontent.com"
+
+# Create the namespace with:  npx wrangler kv namespace create OPENS
+# then paste the id it prints below.
+[[kv_namespaces]]
+binding = "OPENS"
+id = "<KV namespace id>"
+
+# The secret is NOT stored here. Set it with:  npx wrangler secret put SECRET

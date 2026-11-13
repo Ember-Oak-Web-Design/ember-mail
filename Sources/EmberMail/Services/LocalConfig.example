@@ -1,0 +1,7 @@
+// Copy to LocalConfig.swift (gitignored) and fill in. See docs/SETUP.md.
+enum LocalConfig {
+    /// Public Google OAuth client id (the secret lives on the Worker).
+    static let googleClientID = "1234567890-abc.apps.googleusercontent.com"
+    /// Your deployed Worker (read receipts + Google token exchange), without a trailing slash.
+    static let workerBaseURL = "https://t.example.com"
+}

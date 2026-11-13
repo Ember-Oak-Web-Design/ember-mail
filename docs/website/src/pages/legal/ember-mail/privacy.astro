@@ -1,0 +1,57 @@
+---
+import LegalLayout from "../../../layouts/LegalLayout.astro";
+// TODO: set a mailbox you actually monitor before submitting to Google.
+const contact = "REPLACE-ME@emberandoakdesign.com";
+---
+<LegalLayout title="Privacy Policy" updated="13 November 2026">
+  <p>Ember Mail is a Mac email and calendar app made by Ember &amp; Oak ("we", "us"). This policy explains what the app does with your information. The short version: <strong>your email and calendar stay between Google (or your mail server) and your Mac. We never receive, store or read them.</strong></p>
+
+  <h2>What the app accesses</h2>
+  <p>When you connect a Google account, you grant Ember Mail access to:</p>
+  <ul>
+    <li><strong>Your Google profile</strong> (name and email address) to label the account in the app.</li>
+    <li><strong>Gmail</strong> (read, send, label, archive, trash and manage drafts) to show your mailbox and let you write, reply and organise mail.</li>
+    <li><strong>Google Calendar</strong> (view and create events) to show your calendar next to your inbox and add events you create.</li>
+  </ul>
+  <p>If you add a non-Google (IMAP/SMTP) account, the app connects directly to your mail provider using the server details and password you enter.</p>
+
+  <h2>Where your data lives</h2>
+  <ul>
+    <li>Messages, attachments, calendar events and drafts are fetched straight from Google or your mail server to your Mac. A cache of headers, drafts and scheduled messages is kept in the app's folder on your Mac.</li>
+    <li>Sign-in tokens and passwords are stored in the macOS Keychain on your Mac.</li>
+    <li>We do not operate any server that stores your email, calendar data, contacts, or passwords.</li>
+  </ul>
+
+  <h2>The Ember Mail sign-in helper</h2>
+  <p>Google requires a confidential "client secret" to finish sign-in. So that this secret is never shipped inside the app, a small service we run (a Cloudflare Worker) completes the token exchange and token refresh with Google on your behalf. It passes your one-time sign-in code or refresh token to Google and returns Google's response to your Mac. <strong>It does not store or log these tokens and cannot read your mail.</strong> Cloudflare may keep standard technical request logs (such as IP address and timestamp) as part of operating the network.</p>
+
+  <h2>Read receipts</h2>
+  <p>If you leave read receipts on, the app adds a tiny invisible image to the emails <em>you send</em>. When a recipient's mail app loads it, our service records: the time, the recipient's mail app / browser identifier, and an approximate location and network name derived from their IP address. Records are tied to a random ID (not the email's content, subject or addresses), are readable only with a private key held by the sender, and are deleted automatically after 90 days. You can switch read receipts off per message or entirely in Settings. If you don't use read receipts, none of this applies.</p>
+
+  <h2>What we don't do</h2>
+  <ul>
+    <li>We don't sell, rent or share your data.</li>
+    <li>We don't use your data for advertising or profiling.</li>
+    <li>We don't use analytics or tracking inside the app.</li>
+    <li>No person at Ember &amp; Oak reads your email, and we don't use it to train AI or machine-learning models.</li>
+  </ul>
+
+  <h2>Google API Services — Limited Use</h2>
+  <p>Ember Mail's use and transfer of information received from Google APIs to any other app will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes">Google API Services User Data Policy</a>, including the Limited Use requirements. We use Google user data only to provide and improve the user-facing email and calendar features you see in the app. We do not transfer it to others except as needed to provide those features, to comply with the law, or as part of a merger. We do not use it for advertising, and humans do not read it unless you explicitly ask us to for support, it is needed for security, or the law requires it.</p>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li><strong>Disconnect:</strong> remove the account in the app's Settings to delete its tokens and cached data from your Mac.</li>
+    <li><strong>Revoke access:</strong> visit <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> and remove Ember Mail at any time.</li>
+    <li><strong>Delete everything:</strong> deleting the app and its folder in <code>~/Library/Application Support/EmberMail</code> removes all local data.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>Ember Mail is not directed at children under 13 and we don't knowingly collect their information.</p>
+
+  <h2>Changes</h2>
+  <p>If we change how the app handles data we will update this page and its date. Material changes will also be mentioned in the app.</p>
+
+  <h2>Contact</h2>
+  <p>Questions or requests: <a href={`mailto:${contact}`}>{contact}</a>.</p>
+</LegalLayout>

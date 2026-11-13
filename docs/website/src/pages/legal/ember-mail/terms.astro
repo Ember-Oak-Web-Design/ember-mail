@@ -1,0 +1,44 @@
+---
+import LegalLayout from "../../../layouts/LegalLayout.astro";
+// TODO: set these before submitting to Google.
+const contact = "REPLACE-ME@emberandoakdesign.com";
+const jurisdiction = "REPLACE-ME (e.g. the laws of South Africa)";
+---
+<LegalLayout title="Terms of Service" updated="13 November 2026">
+  <p>These terms govern your use of Ember Mail, a Mac email and calendar app made by Ember &amp; Oak ("we", "us"). By using the app you agree to them. If you don't agree, please don't use it.</p>
+
+  <h2>The service</h2>
+  <p>Ember Mail lets you read, write and organise email and view and create calendar events from your own accounts (Google and IMAP/SMTP). It runs on your Mac and talks directly to your providers. We don't host your mailbox. Features may change or be removed over time.</p>
+
+  <h2>Your accounts and responsibilities</h2>
+  <ul>
+    <li>You're responsible for your accounts, passwords and the content you send.</li>
+    <li>You must have the right to access any account you connect.</li>
+    <li>Don't use the app for spam, harassment, unlawful content, or to break the terms of your mail or calendar provider (including <a href="https://policies.google.com/terms">Google's Terms of Service</a>).</li>
+    <li>Read receipts are a convenience. In many places, tracking recipients requires telling them or getting consent. You're responsible for following the privacy laws that apply to you and your recipients.</li>
+  </ul>
+
+  <h2>Privacy</h2>
+  <p>How we handle information is described in our <a href="/legal/ember-mail/privacy">Privacy Policy</a>.</p>
+
+  <h2>Third-party services</h2>
+  <p>The app depends on services we don't control, such as Google, your mail provider and Cloudflare. Their availability and terms are outside our responsibility, and they may change or limit access (for example Google API quotas or expiring sign-ins).</p>
+
+  <h2>Ownership</h2>
+  <p>Ember Mail, its name and its logo belong to Ember &amp; Oak. Your emails, calendar entries and other content remain yours.</p>
+
+  <h2>No warranty</h2>
+  <p>The app is provided "as is" and "as available" without warranties of any kind. We don't guarantee it will be uninterrupted, error-free, or that messages will always be delivered, received or scheduled sends will go out on time (scheduled messages require your Mac to be on and the app running). Keep backups of anything important.</p>
+
+  <h2>Limitation of liability</h2>
+  <p>To the fullest extent permitted by law, Ember &amp; Oak is not liable for indirect, incidental or consequential damages, or for lost data, profits or opportunities, arising from your use of the app. Our total liability for any claim is limited to the amount you paid for the app, or zero if it was free. Nothing here limits liability that can't legally be limited.</p>
+
+  <h2>Ending use</h2>
+  <p>You can stop at any time by removing your accounts and deleting the app. We may suspend or end access to our sign-in and read-receipt services if they are misused or put at risk.</p>
+
+  <h2>Changes to these terms</h2>
+  <p>We may update these terms and will change the date above. Continuing to use the app after a change means you accept it.</p>
+
+  <h2>Governing law and contact</h2>
+  <p>These terms are governed by {jurisdiction}. Questions: <a href={`mailto:${contact}`}>{contact}</a>.</p>
+</LegalLayout>

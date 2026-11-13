@@ -1,0 +1,17 @@
+.build/
+build/
+.swiftpm/
+*.xcodeproj
+DerivedData/
+.DS_Store
+server/tracking-worker/node_modules/
+server/tracking-worker/.wrangler/
+
+docs/confidential.txt
+*.zip
+.env
+.dev.vars
+
+# Deployment-specific values (see *.example)
+Sources/EmberMail/Services/LocalConfig.swift
+server/tracking-worker/wrangler.toml
