@@ -18,6 +18,8 @@ protocol MailProvider: AnyObject, Sendable {
     func setFlagged(_ flagged: Bool, _ message: MessageSummary) async throws
     func archive(_ message: MessageSummary) async throws
     func trash(_ message: MessageSummary) async throws
+    /// Moves a message to another folder (IMAP) or label (Gmail: adds the label, removes the current one).
+    func move(_ message: MessageSummary, toPath path: String) async throws
     func send(_ message: OutgoingMessage) async throws -> SentResult
     /// Saves (or replaces) a draft on the server.
     func saveDraft(_ message: OutgoingMessage, extraHeaders: [String], replacing: DraftRef?) async throws -> DraftRef
@@ -25,6 +27,12 @@ protocol MailProvider: AnyObject, Sendable {
     /// Server reference for a message shown in the Drafts folder (to resume editing it).
     func draftRef(for message: MessageSummary) async throws -> DraftRef?
     func shutdown() async
+    /// Summaries we already have for a mailbox (from cache), so the provider can skip re-downloading them.
+    func seedKnown(_ summaries: [MessageSummary]) async
+}
+
+extension MailProvider {
+    func seedKnown(_ summaries: [MessageSummary]) async {}
 }
 
 extension GmailProvider {
@@ -165,7 +173,8 @@ actor IMAPProvider: MailProvider {
             hasAttachments: part.contentType.type == "multipart/mixed",
             messageIDHeader: part.header("message-id")?.trimmingCharacters(in: .whitespaces),
             references: Self.messageIDs(part.header("references")),
-            inReplyTo: Self.messageIDs(part.header("in-reply-to")).first)
+            inReplyTo: Self.messageIDs(part.header("in-reply-to")).first,
+            receivedAt: fetched.internalDate)
     }
 
     static func messageIDs(_ header: String?) -> [String] {
@@ -274,6 +283,11 @@ actor IMAPProvider: MailProvider {
     private func mailbox(role: MailboxRole) async throws -> Mailbox? {
         if cachedMailboxes.isEmpty { _ = try await mailboxes() }
         return cachedMailboxes.first(role: role)
+    }
+
+    func move(_ message: MessageSummary, toPath path: String) async throws {
+        guard let uid = Int(message.remoteID), path != message.mailboxPath else { return }
+        try await client.move(message.mailboxPath, uid: uid, to: path)
     }
 
     func archive(_ message: MessageSummary) async throws {

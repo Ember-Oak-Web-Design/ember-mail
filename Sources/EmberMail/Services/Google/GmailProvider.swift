@@ -91,9 +91,45 @@ actor GmailProvider: MailProvider {
         return items
     }
 
+    /// Summaries already downloaded, keyed "path|id". Only their read/starred state can change.
+    private var known: [String: MessageSummary] = [:]
+
+    func seedKnown(_ summaries: [MessageSummary]) {
+        for m in summaries where m.accountID == accountID { known["\(m.mailboxPath)|\(m.remoteID)"] = m }
+    }
+
+    /// One id list plus two tiny "which are unread / starred" lists, then metadata only for new messages.
+    /// (Any unread/starred message in the newest `limit` is also among the newest `limit` unread/starred.)
     func messages(in mailbox: Mailbox, limit: Int) async throws -> [MessageSummary] {
-        let list = try await HTTP.json(MessageList.self, try await request("/messages", query: listQuery(for: mailbox, limit: limit)))
-        return try await fetchMetadata(ids: (list.messages ?? []).map(\.id), mailbox: mailbox)
+        let listReq = try await request("/messages", query: listQuery(for: mailbox, limit: limit))
+        let unreadReq = try await request("/messages", query: listQuery(for: mailbox, limit: limit, q: "is:unread"))
+        let starredReq = try await request("/messages", query: listQuery(for: mailbox, limit: limit, q: "is:starred"))
+        async let listResult = HTTP.json(MessageList.self, listReq)
+        async let unreadResult = try? HTTP.json(MessageList.self, unreadReq)
+        async let starredResult = try? HTTP.json(MessageList.self, starredReq)
+        let ids = (try await listResult).messages?.map(\.id) ?? []
+        let unreadList = await unreadResult, starredList = await starredResult
+
+        var out: [MessageSummary] = []
+        var missing: [String] = []
+        if let unreadList, let starredList {
+            let unread = Set((unreadList.messages ?? []).map(\.id))
+            let starred = Set((starredList.messages ?? []).map(\.id))
+            for id in ids {
+                if var m = known["\(mailbox.path)|\(id)"] {
+                    m.isRead = !unread.contains(id)
+                    m.isFlagged = starred.contains(id)
+                    out.append(m)
+                } else {
+                    missing.append(id)
+                }
+            }
+        } else {
+            missing = ids
+        }
+        out += try await fetchMetadata(ids: missing, mailbox: mailbox)
+        for m in out { known["\(mailbox.path)|\(m.remoteID)"] = m }
+        return out.sorted { $0.date > $1.date }
     }
 
     func search(_ query: String, in mailbox: Mailbox, limit: Int) async throws -> [MessageSummary] {
@@ -105,9 +141,9 @@ actor GmailProvider: MailProvider {
         var results: [MessageSummary] = []
         let headers = Self.metadataHeaders
         let query = [URLQueryItem(name: "format", value: "metadata")] + headers.map { URLQueryItem(name: "metadataHeaders", value: $0) }
-        // Fetch in parallel batches of 10.
-        for chunkStart in stride(from: 0, to: ids.count, by: 10) {
-            let chunk = Array(ids[chunkStart..<min(ids.count, chunkStart + 10)])
+        // Fetch in parallel batches of 20 (Gmail allows ~50 metadata reads/second per user).
+        for chunkStart in stride(from: 0, to: ids.count, by: 20) {
+            let chunk = Array(ids[chunkStart..<min(ids.count, chunkStart + 20)])
             var requests: [URLRequest] = []
             for id in chunk { requests.append(try await request("/messages/\(id)", query: query)) }
             let batch = try await withThrowingTaskGroup(of: Message?.self) { group -> [Message] in
@@ -192,6 +228,13 @@ actor GmailProvider: MailProvider {
 
     func archive(_ message: MessageSummary) async throws {
         try await modify(message.remoteID, remove: ["INBOX"])
+    }
+
+    func move(_ message: MessageSummary, toPath path: String) async throws {
+        guard path != message.mailboxPath else { return }
+        if path == "TRASH" { return try await trash(message) }
+        let remove = message.mailboxPath == Self.allMailPath ? [] : [message.mailboxPath]
+        try await modify(message.remoteID, add: path == Self.allMailPath ? [] : [path], remove: remove)
     }
 
     func trash(_ message: MessageSummary) async throws {

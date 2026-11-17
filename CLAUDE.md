@@ -98,7 +98,27 @@ Sources/EmberMail/
   (`anchor apple`, partition `apple-tool:`), which never changes. Older layouts (`vault-v1` direct item, one item per
   secret) migrate automatically on first launch (the only moment a prompt can occur). Never read the Keychain per
   render and never add items via SecItemAdd from the app (that reintroduces the cdhash pin).
-- Polling (no IDLE): `Prefs.refreshMinutes`. New-mail and open notifications go through `Notifier`.
+- **Speed & consistency:** lists live in memory (`listCache`) + disk; folders whose unread count rises are prefetched
+  (`prefetch`), and All Inboxes also caches each Inbox, so opening a folder never waits on the network. Gmail's
+  `messages(in:)` is incremental (`seedKnown` + `is:unread`/`is:starred` id lists; metadata only for new ids). Opening a
+  message cancels the previous message's body/thread loads (`openTasks`); `IMAPClient.withRetry` skips cancelled work once it
+  gets the lock, so stale loads don't block the single connection. Local read/flag changes are kept in `pendingFlags` until the
+  server confirms them and are re-applied to any list/thread/count fetched before that (`applyPending`), so a slow refresh can't
+  flip a message back to unread or reset a badge.
+- Polling (no IDLE): `Prefs.refreshMinutes`. New-mail and open notifications go through `Notifier`. `AppDelegate` holds a
+  `beginActivity(.userInitiatedAllowingIdleSystemSleep)` so App Nap doesn't freeze polling in the background.
+- **New-mail watcher** (`AppState.checkForNewMail`, first step of `refreshAll`): independent of the on-screen list. Per account it
+  fetches the latest 30 Inbox messages, runs routing rules on ones that arrived since `lastInboxCheck-<account>` (UserDefaults,
+  so mail that came in while the app was closed is routed too), then notifies (only mail that arrived after launch). Other
+  folders with notifications on are checked via `unreadCounts`; only a rising count triggers `unreadMessages`. Dedup via
+  `processedKeys` (remoteID + Message-ID, so Gmail labels / IMAP moves don't double-notify). "New" uses `MessageSummary.arrival`
+  (IMAP INTERNALDATE, not the sender's Date header).
+- **Rules & notification settings** (`Models/MailRules.swift`, pure + unit-tested; persisted by `RulesStore` in `rules.json` /
+  `notification-settings.json`): `MailRule` (conditions on sender / domain / recipient / subject with contains / is / regex;
+  actions mark read, flag, move/archive/trash), `RuleOutcome.evaluate` (all matching rules combine, first move wins).
+  `NotificationSettings`: per-folder toggles (default all except spam/trash/sent/drafts/starred/important/Gmail All Mail) +
+  `SenderNotifyRule` always/never (sender rules beat folder settings). UI: Settings → Notifications and Rules (`RulesSettingsView.swift`).
+  `MailProvider.move(_:toPath:)` exists for rules.
 - **Conversations:** `MessageSummary.threadKey` groups list rows (Gmail threadId, otherwise
   References root / In-Reply-To / normalized "Re:" subject). Opening a message calls
   `provider.thread(for:)`: Gmail uses `threads.get`; IMAP searches Inbox + Sent by subject and keeps
@@ -123,6 +143,11 @@ Sources/EmberMail/
   the saved copy; sending or scheduling deletes it. Drafts carry an `X-Ember-Draft` header (base64 JSON
   `DraftMeta`), so "Edit Draft" (`AppState.resumeDraft`) restores the editable body separately from the
   signature and quote. Drafts made in other apps resume with their plain text as the body.
+- **Calendar invites:** `MessageExtraction` keeps `text/calendar` parts (or a `.ics` / `application/ics` attachment) out of the
+  body text and parses them with `ICSParser` (Services/MIME, unit-tested: unfolding, escaping, UTC / TZID / VTIMEZONE offsets /
+  common Windows zone names, VALUE=DATE all-day with exclusive end → inclusive, DURATION, METHOD:CANCEL) into
+  `MessageBody.invite`. `InviteCard` (ReaderView) shows it with "Add to Calendar…", which opens `NewEventSheet(prefill:)`
+  (all fields editable, calendar picker) and creates the event via `CalendarStore.create`. No RSVP is sent to the organizer.
 - **Calendar:** controls live in the window toolbar (no extra header row). `MonthGridView` must use
   `store.monthGridDays` (always 42 days), never `visibleDays`, which shrinks in Day mode. That caused a
   crash when switching Month → Day.

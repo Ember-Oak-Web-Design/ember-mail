@@ -103,6 +103,8 @@ actor IMAPClient {
     private func withRetry<T>(_ body: () async throws -> T) async throws -> T {
         await lock()
         defer { unlock() }
+        // Queued work whose result is no longer wanted (e.g. you clicked another message) is skipped.
+        if Task.isCancelled { throw CancellationError() }
         do {
             try await connect()
             return try await body()

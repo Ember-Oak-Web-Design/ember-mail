@@ -120,14 +120,40 @@ final class AppState {
     let schedule = ScheduleStore()
     let shortcuts = ShortcutStore()
     let updates = UpdateStore()
+    let rules = RulesStore()
 
     /// Folders chosen for the sidebar's Simple view, per account (accountID → mailbox paths).
     private(set) var simpleFolders: [String: [String]] = AppState.loadSimpleFolders()
 
     private var providers: [UUID: any MailProvider] = [:]
     private var refreshLoop: Task<Void, Never>?
-    private var knownInboxIDs: [UUID: Set<String>] = [:]
+    // New-mail watcher (runs in the background, whatever is on screen)
+    private let launchTime = Date()
+    private var watchCounts: [String: Int] = [:]
+    /// "account|remoteID" and "account|<Message-ID>" of messages already routed/notified.
+    private var processedKeys: Set<String> = []
+    /// Messages we notified about, so clicking a notification can open them even outside the current list.
+    private var notifiedMessages: [String: MessageSummary] = [:]
+    private var isWatching = false
     private var listToken = UUID()
+    /// Lists by cache key, kept in memory so switching folders never waits for disk or network.
+    private var listCache: [String: [MessageSummary]] = [:]
+    private var prefetching: Set<String> = []
+    /// Body/thread loads for the message in the reader; cancelled when you move on, so they don't
+    /// hold up the (single) IMAP connection for the next click.
+    private var openTasks: [Task<Void, Never>] = []
+
+    /// Read/flag changes made here that the server may not reflect yet. Re-applied to anything fetched
+    /// before the change was confirmed, so a slow refresh can't flip a message back to unread.
+    private struct PendingFlag {
+        var read: Bool?
+        var flagged: Bool?
+        var mailboxID: String
+        var seq = 0
+        var confirmedAt: Date?
+    }
+    private var pendingFlags: [String: PendingFlag] = [:]
+    private var pendingSeq = 0
     private var bootstrapped = false
     private var scheduleLoop: Task<Void, Never>?
     /// Message to select once the list for the current selection has loaded (from a notification).
@@ -355,6 +381,8 @@ final class AppState {
     /// Inbox counts always; in Simple view also every hidden folder that can "pop up" with new mail.
     func refreshUnreadCounts() async {
         let simple = UserDefaults.standard.string(forKey: Prefs.sidebarMode) == "simple"
+        let started = Date()
+        var rose: [Mailbox] = []
         for account in accounts {
             guard let provider = providers[account.id] else { continue }
             let boxes = mailboxes[account.id] ?? []
@@ -362,8 +390,55 @@ final class AppState {
             if simple { targets += boxes.filter { canPopUp($0) && !isInSimpleView($0) } }
             guard !targets.isEmpty else { continue }
             let counts = await provider.unreadCounts(targets)
-            for (id, count) in counts { unread[id] = count }
+            for (id, count) in counts {
+                // A read/unread change we made isn't confirmed for this fetch yet: keep our local count.
+                if hasUnconfirmedReadChange(in: id, since: started) { continue }
+                if count > (unread[id] ?? 0), let mb = targets.first(where: { $0.id == id }) { rose.append(mb) }
+                unread[id] = count
+            }
         }
+        // New mail somewhere: load those lists now so clicking the folder shows them instantly.
+        if !rose.isEmpty {
+            Task {
+                // Inboxes are already covered when All Inboxes is on screen (its reload caches each one).
+                for mb in rose where !(mb.role == .inbox && selection == .allInboxes) { await prefetch(.mailbox(mb)) }
+                if rose.contains(where: { $0.role == .inbox }) { await prefetch(.allInboxes) }
+            }
+        }
+    }
+
+    private func hasUnconfirmedReadChange(in mailboxID: String, since date: Date) -> Bool {
+        pendingFlags.values.contains { $0.mailboxID == mailboxID && $0.read != nil && ($0.confirmedAt.map { $0 > date } ?? true) }
+    }
+
+    /// Re-applies local read/flag changes the server hadn't confirmed when `fetchedAt` began.
+    private func applyPending(_ list: [MessageSummary], fetchedAt: Date) -> [MessageSummary] {
+        let cutoff = Date().addingTimeInterval(-120)
+        pendingFlags = pendingFlags.filter { ($0.value.confirmedAt ?? .distantFuture) > cutoff }
+        guard !pendingFlags.isEmpty else { return list }
+        return list.map { m in
+            guard let p = pendingFlags[m.id], p.confirmedAt.map({ $0 > fetchedAt }) ?? true else { return m }
+            var m = m
+            if let r = p.read { m.isRead = r }
+            if let f = p.flagged { m.isFlagged = f }
+            return m
+        }
+    }
+
+    private func notePending(_ message: MessageSummary, read: Bool? = nil, flagged: Bool? = nil) -> Int {
+        pendingSeq += 1
+        var p = pendingFlags[message.id] ?? PendingFlag(mailboxID: "\(message.accountID.uuidString)|\(message.mailboxPath)")
+        if let read { p.read = read }
+        if let flagged { p.flagged = flagged }
+        p.seq = pendingSeq
+        p.confirmedAt = nil
+        pendingFlags[message.id] = p
+        return pendingSeq
+    }
+
+    private func confirmPending(_ id: String, seq: Int, success: Bool) {
+        guard pendingFlags[id]?.seq == seq else { return } // a newer change is in flight
+        if success { pendingFlags[id]?.confirmedAt = Date() } else { pendingFlags[id] = nil }
     }
 
     // MARK: - Simple sidebar view
@@ -442,6 +517,7 @@ final class AppState {
         for account in accounts where (mailboxes[account.id] ?? []).isEmpty {
             await refreshMailboxes(account.id)
         }
+        await checkForNewMail()
         await reloadList(quiet: quiet)
         if filter.unreadOnly { await loadUnreadFilter() }
         await refreshUnreadCounts()
@@ -465,7 +541,70 @@ final class AppState {
 
     private func loadCachedList() {
         guard let key = cacheKey(for: selection) else { messages = []; return }
-        messages = DiskStore.load([MessageSummary].self, from: key) ?? []
+        let cached = listCache[key] ?? DiskStore.load([MessageSummary].self, from: key) ?? []
+        messages = applyPending(cached, fetchedAt: .distantPast)
+    }
+
+    private func storeList(_ list: [MessageSummary], for item: SidebarItem?) {
+        guard let key = cacheKey(for: item) else { return }
+        listCache[key] = list
+        DiskStore.save(list, as: key)
+    }
+
+    private func targets(for item: SidebarItem?) -> [Mailbox] {
+        switch item {
+        case .allInboxes: accounts.compactMap { inbox(for: $0.id) }
+        case .mailbox(let mb): [mb]
+        default: []
+        }
+    }
+
+    /// Fetches the list for a sidebar item. `fallback` supplies cached rows for mailboxes that fail.
+    private func fetchList(_ targets: [Mailbox], quiet: Bool, notify: Bool,
+                           fallback: [MessageSummary]) async -> (list: [MessageSummary], failed: Bool) {
+        // Let providers reuse what we already have (Gmail then only downloads new messages).
+        for mb in targets {
+            await providers[mb.accountID]?.seedKnown(fallback.filter { $0.accountID == mb.accountID && $0.mailboxPath == mb.path })
+        }
+        let started = Date()
+        var collected: [MessageSummary] = []
+        var failed = false
+        await withTaskGroup(of: (Mailbox, Result<[MessageSummary], Error>).self) { group in
+            for mb in targets {
+                guard let provider = providers[mb.accountID] else { continue }
+                group.addTask {
+                    do { return (mb, .success(try await provider.messages(in: mb, limit: Self.listLimit))) }
+                    catch { return (mb, .failure(error)) }
+                }
+            }
+            for await (mb, result) in group {
+                switch result {
+                case .success(let list):
+                    collected += list
+                case .failure(let error):
+                    failed = true
+                    if !quiet { report(error, account: mb.accountID) }
+                    collected += fallback.filter { $0.accountID == mb.accountID && $0.mailboxPath == mb.path }
+                }
+            }
+        }
+        collected.sort { $0.date > $1.date }
+        return (applyPending(collected, fetchedAt: started), failed)
+    }
+
+    /// Loads a folder's list in the background (e.g. when new mail arrives there), so opening it is instant.
+    private func prefetch(_ item: SidebarItem) async {
+        guard item != selection, let key = cacheKey(for: item), !prefetching.contains(key) else { return }
+        let targets = targets(for: item)
+        guard !targets.isEmpty else { return }
+        prefetching.insert(key)
+        defer { prefetching.remove(key) }
+        let cached = listCache[key] ?? DiskStore.load([MessageSummary].self, from: key) ?? []
+        let (list, failed) = await fetchList(targets, quiet: true, notify: false, fallback: cached)
+        guard !failed else { return }
+        storeList(list, for: item)
+        // If you clicked the folder while it was loading, show the fresh list now.
+        if selection == item, !isLoadingList { messages = list }
     }
 
     private func selectionChanged() {
@@ -487,49 +626,24 @@ final class AppState {
         let current = selection
         let token = UUID()
         listToken = token
-        let targets: [Mailbox]
-        switch current {
-        case .allInboxes:
-            targets = accounts.compactMap { inbox(for: $0.id) }
-        case .mailbox(let mb):
-            targets = [mb]
-        default:
-            return
-        }
+        guard current == .allInboxes || { if case .mailbox = current { return true }; return false }() else { return }
+        let targets = targets(for: current)
         guard !targets.isEmpty else {
             if current == .allInboxes { messages = [] }
             return
         }
         isLoadingList = true
         defer { if listToken == token { isLoadingList = false } }
-
-        var collected: [MessageSummary] = []
-        var failed = false
-        await withTaskGroup(of: (Mailbox, Result<[MessageSummary], Error>).self) { group in
-            for mb in targets {
-                guard let provider = providers[mb.accountID] else { continue }
-                group.addTask {
-                    do { return (mb, .success(try await provider.messages(in: mb, limit: Self.listLimit))) }
-                    catch { return (mb, .failure(error)) }
-                }
-            }
-            for await (mb, result) in group {
-                switch result {
-                case .success(let list):
-                    collected += list
-                    if mb.role == .inbox { notifyNewMail(list, accountID: mb.accountID) }
-                case .failure(let error):
-                    failed = true
-                    if !quiet { report(error, account: mb.accountID) }
-                    // Keep cached messages for the failed mailbox.
-                    collected += messages.filter { $0.accountID == mb.accountID && $0.mailboxPath == mb.path }
-                }
+        let (list, failed) = await fetchList(targets, quiet: quiet, notify: true, fallback: messages)
+        guard listToken == token, selection == current else { return }
+        messages = list
+        if !failed {
+            storeList(list, for: current)
+            // All Inboxes already contains each account's Inbox: cache those too, so opening one is instant.
+            if current == .allInboxes {
+                for mb in targets { storeList(list.filter { $0.accountID == mb.accountID && $0.mailboxPath == mb.path }, for: .mailbox(mb)) }
             }
         }
-        guard listToken == token, selection == current else { return }
-        collected.sort { $0.date > $1.date }
-        messages = collected
-        if !failed, let key = cacheKey(for: current) { DiskStore.save(collected, as: key) }
         if let selected = selectedMessageID, !messages.contains(where: { $0.id == selected }) {
             selectedMessageID = nil
         }
@@ -560,16 +674,142 @@ final class AppState {
         }
     }
 
-    private func notifyNewMail(_ list: [MessageSummary], accountID: UUID) {
-        let ids = Set(list.map(\.id))
-        defer { knownInboxIDs[accountID] = ids }
-        guard let known = knownInboxIDs[accountID], UserDefaults.standard.bool(forKey: Prefs.notifyNewMail) else { return }
-        let fresh = list.filter { !known.contains($0.id) && !$0.isRead && $0.date > Date().addingTimeInterval(-3600) }
-        for message in fresh.prefix(3) {
-            Notifier.post(title: message.from.displayName, body: message.subject.isEmpty ? message.snippet : message.subject,
-                          id: message.id, category: Notifier.messageCategory,
-                          userInfo: ["kind": "message", "messageID": message.id])
+    // MARK: - New mail: rules + notifications
+
+    private func processedKeys(for m: MessageSummary) -> [String] {
+        var keys = ["\(m.accountID.uuidString)|\(m.remoteID)"]
+        if let mid = m.messageIDHeader { keys.append("\(m.accountID.uuidString)|\(mid)") }
+        return keys
+    }
+
+    private func isProcessed(_ m: MessageSummary) -> Bool { processedKeys(for: m).contains { processedKeys.contains($0) } }
+    private func markProcessed(_ m: MessageSummary) { processedKeys.formUnion(processedKeys(for: m)) }
+
+    /// Checks every account for new mail: runs routing rules on new Inbox mail, then posts notifications
+    /// for folders you've left on. Independent of the folder on screen, so it works with the window closed.
+    func checkForNewMail() async {
+        guard !isWatching else { return }
+        isWatching = true
+        defer { isWatching = false }
+        let notifyOn = UserDefaults.standard.bool(forKey: Prefs.notifyNewMail)
+        let activeRules = rules.activeRules
+        let settings = rules.notifications
+        let notifyCutoff = launchTime.addingTimeInterval(-60)
+        var alerts: [(MessageSummary, Mailbox?)] = []
+        var routed = 0
+
+        for account in accounts {
+            guard let provider = providers[account.id], let boxes = mailboxes[account.id], !boxes.isEmpty else { continue }
+
+            // Inbox: rules first, then notifications.
+            if let inbox = boxes.first(role: .inbox), notifyOn || !activeRules.isEmpty,
+               let list = try? await provider.messages(in: inbox, limit: 30) {
+                let lastKey = "lastInboxCheck-\(account.id.uuidString)"
+                // Rules also catch mail that arrived while Ember Mail was closed.
+                let ruleCutoff = ((UserDefaults.standard.object(forKey: lastKey) as? Date) ?? launchTime).addingTimeInterval(-180)
+                UserDefaults.standard.set(Date(), forKey: lastKey)
+                for m in list where !isProcessed(m) && (m.arrival > ruleCutoff || m.arrival > notifyCutoff) {
+                    markProcessed(m)
+                    var outcome = RuleOutcome()
+                    if m.arrival > ruleCutoff {
+                        outcome = RuleOutcome.evaluate(activeRules, for: m)
+                        if !outcome.isEmpty, await apply(outcome, to: m, provider: provider) { routed += 1 }
+                    }
+                    let folder: Mailbox?
+                    switch outcome.destination {
+                    case .none: folder = inbox
+                    case .folder(let path): folder = boxes.first { $0.path == path }
+                    case .archive, .trash: folder = nil
+                    }
+                    if notifyOn, m.arrival > notifyCutoff, settings.shouldNotify(m, folder: folder, markedRead: outcome.markRead) {
+                        alerts.append((m, folder))
+                    }
+                }
+            }
+
+            // Other folders you get notifications for: only look inside when their unread count goes up.
+            guard notifyOn else { continue }
+            let watched = boxes.filter { $0.role != .inbox && settings.isEnabled($0) }
+            guard !watched.isEmpty else { continue }
+            let counts = await provider.unreadCounts(watched)
+            for mb in watched {
+                guard let count = counts[mb.id] else { continue }
+                let previous = watchCounts[mb.id]
+                watchCounts[mb.id] = count
+                guard let previous, count > previous,
+                      let fresh = try? await provider.unreadMessages(in: mb, limit: 10) else { continue }
+                for m in fresh where m.arrival > notifyCutoff && !isProcessed(m) {
+                    markProcessed(m)
+                    if settings.shouldNotify(m, folder: mb, markedRead: false) { alerts.append((m, mb)) }
+                }
+            }
         }
+
+        postAlerts(alerts)
+        if routed > 0 {
+            await reloadList(quiet: true)
+            await refreshUnreadCounts()
+            updateDockBadge()
+        }
+    }
+
+    /// Runs a rule's actions on one message. Returns true if anything changed.
+    @discardableResult
+    private func apply(_ outcome: RuleOutcome, to m: MessageSummary, provider: any MailProvider) async -> Bool {
+        do {
+            if outcome.markRead && !m.isRead { try await provider.setRead(true, m) }
+            if outcome.flag && !m.isFlagged { try await provider.setFlagged(true, m) }
+            switch outcome.destination {
+            case .none: break
+            case .archive: try await provider.archive(m)
+            case .trash: try await provider.trash(m)
+            case .folder(let path): try await provider.move(m, toPath: path)
+            }
+            return true
+        } catch {
+            let name = rules.rules.first { outcome.matchedRuleIDs.contains($0.id) }?.name ?? "A rule"
+            show("\(name.isEmpty ? "A rule" : name) couldn't run: \(error.localizedDescription)", error: true)
+            return false
+        }
+    }
+
+    private func postAlerts(_ alerts: [(MessageSummary, Mailbox?)]) {
+        guard !alerts.isEmpty else { return }
+        let sorted = alerts.sorted { $0.0.date > $1.0.date }
+        for (m, folder) in sorted.prefix(5) {
+            notifiedMessages[m.id] = m
+            let where_ = folder.flatMap { $0.role == .inbox ? nil : $0.name }
+            let label = account(m.accountID)?.label
+            let subtitle = [label, where_].compactMap { $0 }.joined(separator: " · ")
+            Notifier.post(title: m.from.displayName, subtitle: subtitle,
+                          body: m.subject.isEmpty ? m.snippet : m.subject,
+                          id: m.id, category: Notifier.messageCategory,
+                          userInfo: ["kind": "message", "messageID": m.id])
+        }
+        if sorted.count > 5 {
+            Notifier.post(title: "Ember Mail", body: "\(sorted.count - 5) more new emails")
+        }
+    }
+
+    /// Applies one rule to what's already in the Inbox (latest 100 per account). Returns how many matched.
+    func runRuleNow(_ rule: MailRule) async -> Int {
+        var count = 0
+        for account in accounts where rule.accountID == nil || rule.accountID == account.id {
+            guard let provider = providers[account.id], let inbox = inbox(for: account.id),
+                  let list = try? await provider.messages(in: inbox, limit: 100) else { continue }
+            let outcome = { (m: MessageSummary) in RuleOutcome.evaluate([rule], for: m) }
+            for m in list {
+                let o = outcome(m)
+                guard !o.isEmpty else { continue }
+                if await apply(o, to: m, provider: provider) { count += 1 }
+            }
+        }
+        if count > 0 {
+            await reloadList(quiet: true)
+            await refreshUnreadCounts()
+            updateDockBadge()
+        }
+        return count
     }
 
     // MARK: - Search
@@ -634,6 +874,7 @@ final class AppState {
         defer { if unreadToken == token { isLoadingUnread = false } }
         var collected: [MessageSummary] = []
         var failed = false
+        let started = Date()
         await withTaskGroup(of: [MessageSummary]?.self) { group in
             for mb in targets {
                 guard let provider = providers[mb.accountID] else { continue }
@@ -648,7 +889,7 @@ final class AppState {
             show("Couldn't fetch all unread mail. Showing what's loaded.", error: true)
             return
         }
-        filterUnread = collected.sorted { $0.date > $1.date }
+        filterUnread = applyPending(collected, fetchedAt: started).sorted { $0.date > $1.date }
     }
 
     // MARK: - Bulk actions
@@ -736,6 +977,7 @@ final class AppState {
         }
         isSearching = true
         defer { isSearching = false }
+        let started = Date()
         var results: [MessageSummary] = []
         for mb in targets {
             guard let provider = providers[mb.accountID] else { continue }
@@ -743,7 +985,7 @@ final class AppState {
             catch { report(error, account: mb.accountID) }
         }
         guard searchText.trimmingCharacters(in: .whitespaces) == q else { return }
-        searchResults = results.sorted { $0.date > $1.date }
+        searchResults = applyPending(results, fetchedAt: started).sorted { $0.date > $1.date }
     }
 
     // MARK: - Messages
@@ -761,8 +1003,10 @@ final class AppState {
     }
 
     private func openMessage(_ id: String) {
+        for task in openTasks { task.cancel() }
+        openTasks = []
         guard let message = summary(id) else { return }
-        if bodies[id] == nil { Task { await loadBody(message) } }
+        if bodies[id] == nil { openTasks.append(Task { await loadBody(message) }) }
         if !message.isRead { setRead(true, message) }
         // Mark the rest of the conversation in the list as read too.
         for other in messages where other.threadKey == message.threadKey && !other.isRead && other.id != id {
@@ -771,7 +1015,7 @@ final class AppState {
         if isDraft(message) {
             threads[id] = [message]
         } else if threads[id] == nil {
-            Task { await loadThread(message) }
+            openTasks.append(Task { await loadThread(message) })
         }
     }
 
@@ -781,14 +1025,15 @@ final class AppState {
         defer { loadingThreads.remove(message.id) }
         do {
             var thread = try await provider.thread(for: message)
+            if Task.isCancelled { return } // moved on: a partial thread must not be cached
             // Use the list's copy of each message where we have it (fresh read/flag state).
-            thread = thread.map { m in messages.first { $0.id == m.id } ?? m }
+            thread = applyPending(thread.map { m in messages.first { $0.id == m.id } ?? m }, fetchedAt: .distantPast)
             threads[message.id] = thread
             for other in thread where !other.isRead && other.id != message.id && other.mailboxPath == message.mailboxPath {
                 setRead(true, other)
             }
         } catch {
-            threads[message.id] = [message]
+            if !Task.isCancelled { threads[message.id] = [message] }
         }
     }
 
@@ -801,9 +1046,10 @@ final class AppState {
         guard let provider = providers[message.accountID] else { return }
         bodyErrors[message.id] = nil
         do {
-            bodies[message.id] = try await provider.body(of: message)
+            let body = try await provider.body(of: message)
+            bodies[message.id] = body
         } catch {
-            bodyErrors[message.id] = error.localizedDescription
+            if !Task.isCancelled, !(error is CancellationError) { bodyErrors[message.id] = error.localizedDescription }
         }
     }
 
@@ -812,12 +1058,18 @@ final class AppState {
         let inboxID = "\(message.accountID.uuidString)|\(message.mailboxPath)"
         if let count = unread[inboxID] { unread[inboxID] = max(0, count + (read ? -1 : 1)) }
         updateDockBadge()
-        perform(message, revert: { $0.isRead = !read }) { try await $0.setRead(read, message) }
+        let seq = notePending(message, read: read)
+        perform(message, revert: { $0.isRead = !read }, done: { [weak self] ok in self?.confirmPending(message.id, seq: seq, success: ok) }) {
+            try await $0.setRead(read, message)
+        }
     }
 
     func setFlagged(_ flagged: Bool, _ message: MessageSummary) {
         updateSummary(message.id) { $0.isFlagged = flagged }
-        perform(message, revert: { $0.isFlagged = !flagged }) { try await $0.setFlagged(flagged, message) }
+        let seq = notePending(message, flagged: flagged)
+        perform(message, revert: { $0.isFlagged = !flagged }, done: { [weak self] ok in self?.confirmPending(message.id, seq: seq, success: ok) }) {
+            try await $0.setFlagged(flagged, message)
+        }
     }
 
     func archive(_ message: MessageSummary) {
@@ -844,12 +1096,15 @@ final class AppState {
     private func perform(_ message: MessageSummary,
                          revert: ((inout MessageSummary) -> Void)? = nil,
                          restore: Bool = false,
+                         done: ((Bool) -> Void)? = nil,
                          _ action: @escaping (any MailProvider) async throws -> Void) {
-        guard let provider = providers[message.accountID] else { return }
+        guard let provider = providers[message.accountID] else { done?(false); return }
         Task {
             do {
                 try await action(provider)
+                done?(true)
             } catch {
+                done?(false)
                 if let revert { updateSummary(message.id, revert) }
                 if restore {
                     messages.append(message)
@@ -1106,7 +1361,7 @@ final class AppState {
             }
             message = reminder.message
         } else if kind == "message", let id = userInfo["messageID"] as? String {
-            message = summary(id)
+            message = summary(id) ?? notifiedMessages[id]
         }
         guard let message else { return nil }
         NSApp.activate(ignoringOtherApps: true)

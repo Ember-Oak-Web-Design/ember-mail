@@ -20,6 +20,10 @@ struct SettingsView: View {
         TabView {
             AccountsSettings()
                 .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
+            NotificationsSettings()
+                .tabItem { Label("Notifications", systemImage: "bell.badge") }
+            RulesSettings()
+                .tabItem { Label("Rules", systemImage: "arrow.triangle.branch") }
             ReceiptsSettings()
                 .tabItem { Label("Read Receipts", systemImage: "eye") }
             ShortcutsSettings()
@@ -280,7 +284,7 @@ struct AddIMAPAccountSheet: View {
 // MARK: - Save bar
 
 /// Footer shared by every settings page: nothing is applied until Save (⌘S) is pressed.
-private struct SaveBar: View {
+struct SaveBar: View {
     let isDirty: Bool
     let save: () -> Void
     let revert: () -> Void
@@ -365,14 +369,13 @@ private struct GeneralSettings: View {
     @State private var updateNote: String?
     @State private var refreshMinutes = Self.int(Prefs.refreshMinutes, 2)
     @State private var loadRemoteImages = Self.bool(Prefs.loadRemoteImages, true)
-    @State private var notifyNewMail = Self.bool(Prefs.notifyNewMail, true)
     @State private var groupThreads = Self.bool(Prefs.groupThreads, true)
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
     @State private var appearance = AppearanceMode.saved
     @State private var saved = GeneralSettings.current()
     @State private var loginError: String?
 
-    private struct Values: Equatable { var minutes: Int; var images: Bool; var notify: Bool; var group: Bool; var login: Bool; var appearance: AppearanceMode }
+    private struct Values: Equatable { var minutes: Int; var images: Bool; var group: Bool; var login: Bool; var appearance: AppearanceMode }
 
     private static func int(_ key: String, _ fallback: Int) -> Int {
         UserDefaults.standard.object(forKey: key) as? Int ?? fallback
@@ -382,11 +385,11 @@ private struct GeneralSettings: View {
     }
     private static func current() -> Values {
         Values(minutes: int(Prefs.refreshMinutes, 2), images: bool(Prefs.loadRemoteImages, true),
-               notify: bool(Prefs.notifyNewMail, true), group: bool(Prefs.groupThreads, true),
+               group: bool(Prefs.groupThreads, true),
                login: SMAppService.mainApp.status == .enabled, appearance: AppearanceMode.saved)
     }
     private var draft: Values {
-        Values(minutes: refreshMinutes, images: loadRemoteImages, notify: notifyNewMail, group: groupThreads, login: openAtLogin, appearance: appearance)
+        Values(minutes: refreshMinutes, images: loadRemoteImages, group: groupThreads, login: openAtLogin, appearance: appearance)
     }
 
     var body: some View {
@@ -407,7 +410,6 @@ private struct GeneralSettings: View {
                 Text("Every 5 minutes").tag(5)
                 Text("Every 15 minutes").tag(15)
             }
-            Toggle("Notify me about new mail", isOn: $notifyNewMail)
             Toggle("Load remote images in emails", isOn: $loadRemoteImages)
             Text("Turning remote images off stops senders from seeing when you open their emails.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -436,7 +438,6 @@ private struct GeneralSettings: View {
         let d = UserDefaults.standard
         d.set(refreshMinutes, forKey: Prefs.refreshMinutes)
         d.set(loadRemoteImages, forKey: Prefs.loadRemoteImages)
-        d.set(notifyNewMail, forKey: Prefs.notifyNewMail)
         d.set(groupThreads, forKey: Prefs.groupThreads)
         d.set(appearance.rawValue, forKey: Prefs.appearance)
         AppearanceMode.applySaved()
@@ -453,7 +454,7 @@ private struct GeneralSettings: View {
     }
 
     private func revert() {
-        refreshMinutes = saved.minutes; loadRemoteImages = saved.images; notifyNewMail = saved.notify
+        refreshMinutes = saved.minutes; loadRemoteImages = saved.images
         groupThreads = saved.group; openAtLogin = saved.login; appearance = saved.appearance
     }
 }

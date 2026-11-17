@@ -3,7 +3,13 @@ import SwiftUI
 import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    /// Keeps App Nap from freezing the mail check while Ember Mail is in the background.
+    /// (Idle system sleep is still allowed, so this doesn't keep the Mac awake.)
+    private var backgroundActivity: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        backgroundActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep], reason: "Checking for new mail")
         NSApp.setActivationPolicy(.regular)
         AppearanceMode.applySaved()
         NSApp.activate(ignoringOtherApps: true)

@@ -603,6 +603,10 @@ struct NewEventSheet: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
     let initialStart: Date
+    /// Fields from an email invite (all editable before adding).
+    var prefill: InviteEvent? = nil
+    /// Called with the calendar's name after the event was added.
+    var onAdded: ((String) -> Void)? = nil
 
     @State private var title = ""
     @State private var start = Date()
@@ -618,7 +622,7 @@ struct NewEventSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("New Event").font(.title3.weight(.semibold)).padding([.horizontal, .top], 20)
+            Text(prefill == nil ? "New Event" : "Add Invite to Calendar").font(.title3.weight(.semibold)).padding([.horizontal, .top], 20)
             Form {
                 TextField("Title", text: $title)
                 Toggle("All day", isOn: $allDay)
@@ -648,7 +652,7 @@ struct NewEventSheet: View {
                 Button {
                     Task { await save() }
                 } label: {
-                    if saving { ProgressView().controlSize(.small) } else { Text("Add Event") }
+                    if saving { ProgressView().controlSize(.small) } else { Text(prefill == nil ? "Add Event" : "Add to Calendar") }
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -656,11 +660,25 @@ struct NewEventSheet: View {
             }
             .padding(20)
         }
-        .frame(width: 440)
+        .frame(width: prefill == nil ? 440 : 480)
         .onAppear {
-            start = initialStart
-            end = initialStart.addingTimeInterval(3600)
+            if let p = prefill {
+                title = p.title
+                allDay = p.allDay
+                start = p.start
+                end = p.end
+                location = p.location
+                notes = p.notes
+            } else {
+                start = initialStart
+                end = initialStart.addingTimeInterval(3600)
+            }
             calendarID = writable.first(where: \.isPrimary)?.id ?? writable.first?.id
+            // Opened from an email before the calendar was ever shown: load the calendars now.
+            if writable.isEmpty { Task { await app.calendar.reload() } }
+        }
+        .onChange(of: writable.map(\.id)) {
+            if calendarID == nil { calendarID = writable.first(where: \.isPrimary)?.id ?? writable.first?.id }
         }
     }
 
@@ -670,6 +688,7 @@ struct NewEventSheet: View {
         do {
             try await app.calendar.create(title: title, start: start, end: end, allDay: allDay,
                                           location: location, notes: notes, calendar: cal)
+            onAdded?(cal.name)
             dismiss()
         } catch {
             self.error = error.localizedDescription

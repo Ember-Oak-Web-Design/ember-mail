@@ -6,9 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:?usage: release.sh X.Y.Z [notes]}"
+VERSION="${1:?usage: release.sh X.Y[.Z] [notes]}"
 NOTES="${2:-}"
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must look like 1.2.3"; exit 1; }
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "Version must look like 1.2 or 1.2.3"; exit 1; }
 TAG="v$VERSION"
 
 [ "$(git branch --show-current)" = "main" ] || { echo "Releases are cut from main."; exit 1; }

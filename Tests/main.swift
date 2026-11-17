@@ -234,5 +234,130 @@ let hash = String(repeating: "ab", count: 32)
 expectEqual(UpdateLogic.parseChecksum("\(hash.uppercased())  Ember-Mail-1.3.0.zip\n"), hash, "checksum parse")
 expect(UpdateLogic.parseChecksum("nothex") == nil, "bad checksum")
 
+// MARK: Rules & notifications
+let ruleAcct = UUID()
+func ruleMsg(_ from: String, _ subject: String, to: String = "me@example.com", read: Bool = false) -> MessageSummary {
+    MessageSummary(accountID: ruleAcct, mailboxPath: "INBOX", remoteID: UUID().uuidString, threadID: nil,
+                   from: EmailAddress(name: "Sender", email: from), to: [EmailAddress(email: to)], cc: [],
+                   subject: subject, snippet: "", date: Date(), isRead: read, isFlagged: false, hasAttachments: false)
+}
+let news = ruleMsg("digest@mail.news.com", "Weekly Digest #42")
+expect(RuleCondition(field: .senderDomain, op: .equals, value: "news.com").matches(news), "domain is matches subdomain")
+expect(!RuleCondition(field: .senderDomain, op: .equals, value: "ews.com").matches(news), "domain is not a substring match")
+expect(RuleCondition(field: .sender, op: .equals, value: "DIGEST@mail.news.com").matches(news), "sender is, case-insensitive")
+expect(RuleCondition(field: .subject, op: .contains, value: "digest").matches(news), "subject contains")
+expect(RuleCondition(field: .subject, op: .matchesRegex, value: "#\\d+$").matches(news), "subject regex")
+expect(!RuleCondition(field: .subject, op: .matchesRegex, value: "^Invoice").matches(news), "regex no match")
+expect(RuleCondition(field: .subject, op: .matchesRegex, value: "([").regexError != nil, "invalid regex flagged")
+expect(!RuleCondition(field: .subject, op: .matchesRegex, value: "([").matches(news), "invalid regex never matches")
+expect(RuleCondition(field: .recipient, op: .contains, value: "me@").matches(news), "recipient contains")
+expect(!RuleCondition(field: .sender, op: .contains, value: " ").matches(news), "blank value never matches")
+
+var r1 = MailRule(name: "News", conditions: [RuleCondition(field: .senderDomain, op: .equals, value: "news.com")], markRead: true, destination: .folder("News"))
+var r2 = MailRule(name: "Flag digests", conditions: [RuleCondition(field: .subject, op: .contains, value: "digest")], flag: true, destination: .archive)
+let out = RuleOutcome.evaluate([r1, r2], for: news)
+expect(out.markRead && out.flag, "rule actions combine")
+expectEqual(out.destination, RuleDestination.folder("News"), "first move wins")
+expectEqual(out.matchedRuleIDs.count, 2, "both rules matched")
+r1.enabled = false
+expectEqual(RuleOutcome.evaluate([r1], for: news).isEmpty, true, "disabled rule skipped")
+r2.accountID = UUID()
+expect(RuleOutcome.evaluate([r2], for: news).isEmpty, "other-account rule skipped")
+var anyRule = MailRule(matchAll: false, conditions: [RuleCondition(field: .subject, op: .contains, value: "nope"),
+                                                     RuleCondition(field: .sender, op: .contains, value: "digest")], flag: true)
+expect(anyRule.applies(to: news), "any-match rule")
+anyRule.matchAll = true
+expect(!anyRule.applies(to: news), "all-match rule")
+expect(!MailRule(conditions: [RuleCondition(field: .subject, op: .contains, value: "x")]).isValid, "rule without action invalid")
+
+let inboxMB = Mailbox(accountID: ruleAcct, path: "INBOX", name: "Inbox", role: .inbox)
+let spamMB = Mailbox(accountID: ruleAcct, path: "Spam", name: "Spam", role: .junk)
+let customMB = Mailbox(accountID: ruleAcct, path: "Clients", name: "Clients", role: .custom)
+var ns = NotificationSettings()
+expect(ns.isEnabled(inboxMB) && ns.isEnabled(customMB) && !ns.isEnabled(spamMB), "default: all except spam")
+expect(!ns.isEnabled(Mailbox(accountID: ruleAcct, path: "__ALL__", name: "All Mail", role: .archive)), "Gmail All Mail off by default")
+expect(ns.shouldNotify(news, folder: inboxMB, markedRead: false), "notify new inbox mail")
+expect(!ns.shouldNotify(news, folder: inboxMB, markedRead: true), "rule-marked-read: no notification")
+expect(!ns.shouldNotify(news, folder: nil, markedRead: false), "archived by rule: no notification")
+expect(!ns.shouldNotify(ruleMsg("a@b.com", "x", read: true), folder: inboxMB, markedRead: false), "already read: no notification")
+ns.folders[customMB.id] = false
+expect(!ns.shouldNotify(news, folder: customMB, markedRead: false), "muted folder")
+ns.senders = [SenderNotifyRule(pattern: "news.com", mode: .always)]
+expect(ns.shouldNotify(news, folder: customMB, markedRead: false), "always-notify sender beats muted folder")
+expect(ns.shouldNotify(news, folder: spamMB, markedRead: true), "always-notify beats rule mark-read")
+ns.senders = [SenderNotifyRule(pattern: "digest@mail.news.com", mode: .never)]
+expect(!ns.shouldNotify(news, folder: inboxMB, markedRead: false), "never-notify sender")
+expect(SenderNotifyRule(pattern: "@news.com").matches("x@mail.news.com"), "@domain pattern")
+expect(!SenderNotifyRule(pattern: "jo@news.com").matches("jo@mail.news.com"), "address pattern is exact")
+
+// MARK: Calendar invites (ICS)
+let googleICS = """
+BEGIN:VCALENDAR\r
+PRODID:-//Google Inc//Google Calendar 70.9054//EN\r
+METHOD:REQUEST\r
+BEGIN:VEVENT\r
+DTSTART:20261118T080000Z\r
+DTEND:20261118T100000Z\r
+UID:abc123@google.com\r
+ORGANIZER;CN="Lauren, C":mailto:lauren@example.com\r
+LOCATION:First Light\\, Cape Town\r
+SUMMARY:Anne bday at First Light\r
+DESCRIPTION:Bring a gift\\nSee you there\\n\\n-::~:~::~:~:~:~::~\r
+ :~:~:~::~:~::-\\nGoogle boilerplate\r
+BEGIN:VALARM\r
+SUMMARY:Alarm not the event\r
+END:VALARM\r
+END:VEVENT\r
+END:VCALENDAR\r
+"""
+let g = ICSParser.parse(googleICS)
+expectEqual(g?.title, "Anne bday at First Light", "ics summary (not VALARM's)")
+expectEqual(g?.start, Date(timeIntervalSince1970: 1_794_988_800), "ics UTC start")
+expectEqual(g.map { $0.end.timeIntervalSince($0.start) }, 7200, "ics UTC end")
+expectEqual(g?.location, "First Light, Cape Town", "ics unescape comma")
+expectEqual(g?.notes, "Bring a gift\nSee you there", "ics notes cleaned of Google boilerplate")
+expectEqual(g?.organizer?.email, "lauren@example.com", "ics organizer email")
+expectEqual(g?.organizer?.name, "Lauren, C", "ics organizer quoted CN")
+expectEqual(g?.allDay, false, "ics timed")
+expectEqual(g?.isCancelled, false, "ics request not cancelled")
+
+let outlookICS = """
+BEGIN:VCALENDAR
+METHOD:REQUEST
+BEGIN:VTIMEZONE
+TZID:Custom Zone
+BEGIN:STANDARD
+DTSTART:16010101T000000
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0200
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+SUMMARY;LANGUAGE=en-US:Project kickoff
+DTSTART;TZID=Custom Zone:20261120T090000
+DURATION:PT1H30M
+END:VEVENT
+END:VCALENDAR
+"""
+let o = ICSParser.parse(outlookICS)
+expectEqual(o?.title, "Project kickoff", "ics summary with params")
+expectEqual(o?.start, Date(timeIntervalSince1970: 1_795_158_000), "ics VTIMEZONE offset start (09:00 +02:00)")
+expectEqual(o.map { $0.end.timeIntervalSince($0.start) }, 5400, "ics DURATION")
+
+let tzICS = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Call\nDTSTART;TZID=South Africa Standard Time:20261120T090000\nDTEND;TZID=South Africa Standard Time:20261120T093000\nEND:VEVENT\nEND:VCALENDAR"
+expectEqual(ICSParser.parse(tzICS)?.start, Date(timeIntervalSince1970: 1_795_158_000), "ics Windows zone name")
+
+let allDayICS = "BEGIN:VCALENDAR\nMETHOD:CANCEL\nBEGIN:VEVENT\nSUMMARY:Offsite\nDTSTART;VALUE=DATE:20261123\nDTEND;VALUE=DATE:20261125\nEND:VEVENT\nEND:VCALENDAR"
+let ad = ICSParser.parse(allDayICS)
+expectEqual(ad?.allDay, true, "ics all-day")
+expectEqual(ad.map { Calendar.current.dateComponents([.day], from: $0.start, to: $0.end).day }, 1, "ics all-day end made inclusive (2 days)")
+expectEqual(ad?.isCancelled, true, "ics METHOD:CANCEL")
+expect(ICSParser.parse("BEGIN:VCALENDAR\nEND:VCALENDAR") == nil, "ics without event")
+
+let inviteMIME = "Content-Type: multipart/alternative; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nYou're invited\r\n--b\r\nContent-Type: text/calendar; method=REQUEST; charset=UTF-8\r\n\r\n\(googleICS)\r\n--b--\r\n"
+let inviteBody = MessageExtraction.body(from: Data(inviteMIME.utf8))
+expectEqual(inviteBody.invite?.title, "Anne bday at First Light", "invite found in text/calendar part")
+expect(!(inviteBody.text ?? "").contains("BEGIN:VCALENDAR"), "calendar data kept out of body text")
+
 print("\(passes) passed, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

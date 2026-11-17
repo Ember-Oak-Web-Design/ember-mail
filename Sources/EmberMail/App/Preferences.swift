@@ -60,11 +60,12 @@ enum Notifier {
         ])
     }
 
-    static func post(title: String, body: String, id: String = UUID().uuidString,
+    static func post(title: String, subtitle: String = "", body: String, id: String = UUID().uuidString,
                      category: String? = nil, userInfo: [String: String] = [:], at date: Date? = nil) {
         guard available else { return }
         let content = UNMutableNotificationContent()
         content.title = title
+        if !subtitle.isEmpty { content.subtitle = subtitle }
         content.body = body
         content.sound = .default
         content.userInfo = userInfo

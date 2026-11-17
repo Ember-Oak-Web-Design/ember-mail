@@ -11,7 +11,11 @@ enum MessageExtraction {
         var html: String?
         var text: String?
         var attachments: [AttachmentInfo] = []
-        collect(root, html: &html, text: &text, attachments: &attachments)
+        var calendar: String?
+        collect(root, html: &html, text: &text, calendar: &calendar, attachments: &attachments)
+        if calendar == nil, let ics = attachments.first(where: isCalendar) {
+            calendar = String(decoding: ics.data, as: UTF8.self)
+        }
 
         // Inline cid: images → data URIs so they render without network access.
         var embeddedCIDs = Set<String>()
@@ -42,22 +46,29 @@ enum MessageExtraction {
             cc: AddressParser.parseList(root.header("cc")),
             references: references,
             messageIDHeader: root.header("message-id")?.trimmingCharacters(in: .whitespaces),
-            emberDraftMeta: root.header("x-ember-draft")
+            emberDraftMeta: root.header("x-ember-draft"),
+            invite: calendar.flatMap(ICSParser.parse)
         )
     }
 
-    private static func collect(_ part: MIMEPart, html: inout String?, text: inout String?, attachments: inout [AttachmentInfo]) {
+    private static func isCalendar(_ att: AttachmentInfo) -> Bool {
+        let type = att.mimeType.lowercased()
+        return type == "text/calendar" || type == "application/ics" || att.filename.lowercased().hasSuffix(".ics")
+    }
+
+    private static func collect(_ part: MIMEPart, html: inout String?, text: inout String?, calendar: inout String?,
+                                attachments: inout [AttachmentInfo]) {
         let type = part.contentType.type
         if type == "multipart/alternative" {
             // Prefer the richest alternative we understand (last one), but keep a text version too.
             for child in part.children {
-                collect(child, html: &html, text: &text, attachments: &attachments)
+                collect(child, html: &html, text: &text, calendar: &calendar, attachments: &attachments)
             }
             return
         }
         if part.isMultipart {
             for child in part.children {
-                collect(child, html: &html, text: &text, attachments: &attachments)
+                collect(child, html: &html, text: &text, calendar: &calendar, attachments: &attachments)
             }
             return
         }
@@ -76,6 +87,11 @@ enum MessageExtraction {
                 data: part.decodedBody,
                 contentID: cid,
                 isInline: inline))
+            return
+        }
+        if type == "text/calendar" {
+            // Invite data, not body text (it used to show up as raw BEGIN:VCALENDAR…).
+            if calendar == nil { calendar = part.text }
             return
         }
         if type == "text/html" {

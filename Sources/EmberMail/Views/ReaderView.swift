@@ -216,6 +216,11 @@ struct MessageCard: View {
                         .padding(.horizontal, 14)
                         .padding(.bottom, 10)
                 }
+                if let invite = body_?.invite {
+                    InviteCard(invite: invite)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 10)
+                }
                 content
                 if let attachments = body_?.attachments, !attachments.isEmpty {
                     AttachmentStrip(attachments: attachments)
@@ -571,5 +576,99 @@ private struct AttachmentChip: View {
         if (try? attachment.data.write(to: url)) != nil {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
+    }
+}
+
+
+// MARK: - Calendar invites
+
+/// Shown above a message that carries a meeting invite: summary plus "Add to Calendar…".
+struct InviteCard: View {
+    @Environment(AppState.self) private var app
+    let invite: InviteEvent
+    @State private var showSheet = false
+    @State private var addedTo: String?
+
+    /// Already on one of your calendars (e.g. Google added it automatically)?
+    private var existing: CalendarEvent? {
+        app.calendar.events.first {
+            $0.title.compare(invite.title, options: .caseInsensitive) == .orderedSame && abs($0.start.timeIntervalSince(invite.start)) < 60
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 0) {
+                Text(invite.start.formatted(.dateTime.month(.abbreviated)).uppercased())
+                    .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(.vertical, 2)
+                    .background(invite.isCancelled ? Color.secondary : Theme.accent)
+                Text(invite.start.formatted(.dateTime.day()))
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(width: 46, height: 48)
+            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(invite.title).font(.headline).strikethrough(invite.isCancelled)
+                    if invite.isCancelled { Pill(text: "Cancelled", color: .red) }
+                }
+                Label(timeText, systemImage: "clock").font(.callout).foregroundStyle(.secondary)
+                if !invite.location.isEmpty {
+                    Label(invite.location, systemImage: "mappin.and.ellipse").font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let org = invite.organizer {
+                    Label("From \(org.displayName)", systemImage: "person").font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+            Spacer(minLength: 8)
+            actions
+        }
+        .padding(12)
+        .background(Theme.accent.opacity(invite.isCancelled ? 0.04 : 0.08), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.accent.opacity(0.25)))
+        .sheet(isPresented: $showSheet) {
+            NewEventSheet(initialStart: invite.start, prefill: invite) { addedTo = $0 }
+                .environment(app)
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if invite.isCancelled {
+            EmptyView()
+        } else if let addedTo {
+            Label("Added to \(addedTo)", systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green)
+        } else if !app.calendar.hasGoogleAccount {
+            Text("Connect a Google account to add events").font(.caption).foregroundStyle(.secondary).frame(maxWidth: 140)
+        } else {
+            VStack(alignment: .trailing, spacing: 4) {
+                Button { showSheet = true } label: { Label("Add to Calendar…", systemImage: "calendar.badge.plus") }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.regular)
+                if existing != nil {
+                    Label("Already in your calendar", systemImage: "checkmark").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var timeText: String {
+        let cal = Calendar.current
+        if invite.allDay {
+            let first = invite.start.formatted(.dateTime.weekday(.wide).day().month(.wide))
+            return cal.isDate(invite.start, inSameDayAs: invite.end)
+                ? "\(first) · All day"
+                : "\(first) – \(invite.end.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))) · All day"
+        }
+        let day = invite.start.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        let from = invite.start.formatted(date: .omitted, time: .shortened)
+        if cal.isDate(invite.start, inSameDayAs: invite.end) {
+            return "\(day) · \(from) – \(invite.end.formatted(date: .omitted, time: .shortened))"
+        }
+        return "\(day) \(from) – \(invite.end.formatted(.dateTime.day().month(.abbreviated).hour().minute()))"
     }
 }

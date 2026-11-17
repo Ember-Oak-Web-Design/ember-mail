@@ -123,17 +123,22 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top) {
-            Picker("Sidebar", selection: $mode) {
-                Text("All").tag("all")
-                Text("Simple").tag("simple")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                Picker("Sidebar", selection: $mode) {
+                    Text("All").tag("all")
+                    Text("Simple").tag("simple")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 12)
+                .padding(.top, 2)
+                .padding(.bottom, 8)
+                .help("Simple shows only the folders you choose, plus any folder with unread mail")
+                Divider()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 12)
-            .padding(.top, 2)
-            .padding(.bottom, 6)
-            .help("Simple shows only the folders you choose, plus any folder with unread mail")
+            // Solid backing (extended up under the title bar) so folders don't show through while scrolling.
+            .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea(edges: .top))
         }
         .safeAreaInset(edge: .bottom) { SyncFooter() }
         .onChange(of: mode) { Task { await app.refreshUnreadCounts() } }

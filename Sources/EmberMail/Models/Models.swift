@@ -131,6 +131,11 @@ struct MessageSummary: Codable, Identifiable, Hashable, Sendable {
     var messageIDHeader: String?
     var references: [String]?
     var inReplyTo: String?
+    /// When the server received it (IMAP INTERNALDATE). `date` is the sender's Date header, which can lag.
+    var receivedAt: Date? = nil
+
+    /// Arrival time, for "is this new?" checks.
+    var arrival: Date { receivedAt ?? date }
 
     var id: String { "\(accountID.uuidString)|\(mailboxPath)|\(remoteID)" }
 
@@ -193,6 +198,8 @@ struct MessageBody: Sendable {
     var messageIDHeader: String?
     /// Base64 JSON `DraftMeta` from our own drafts (X-Ember-Draft header).
     var emberDraftMeta: String? = nil
+    /// Meeting invite found in a text/calendar part or .ics attachment.
+    var invite: InviteEvent? = nil
 
     /// Best-effort plain text, used for quoting in replies.
     var plainText: String {
