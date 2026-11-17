@@ -47,7 +47,7 @@ cp Sources/EmberMail/Services/LocalConfig.example Sources/EmberMail/Services/Loc
 ./scripts/test.sh
 ```
 
-Developer notes live in [CLAUDE.md](CLAUDE.md). Releases are cut with `./scripts/release.sh X.Y.Z`.
+Releases are cut with `./scripts/release.sh X.Y[.Z] "notes"`.
 
 ## Legal
 

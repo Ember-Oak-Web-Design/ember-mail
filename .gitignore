@@ -15,3 +15,6 @@ docs/confidential.txt
 # Deployment-specific values (see *.example)
 Sources/EmberMail/Services/LocalConfig.swift
 server/tracking-worker/wrangler.toml
+
+# Local-only notes (not published)
+CLAUDE.md
