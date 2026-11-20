@@ -250,6 +250,7 @@ struct DraftRef: Codable, Hashable, Sendable {
 /// editable body separately from the signature and quoted text.
 struct DraftMeta: Codable {
     var body: String
+    var bodyHTML: String? = nil
     var to: String
     var cc: String
     var bcc: String

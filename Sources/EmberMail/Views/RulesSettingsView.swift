@@ -104,7 +104,7 @@ struct NotificationsSettings: View {
     }
 
     private func folders(for account: Account) -> [Mailbox] {
-        (app.mailboxes[account.id] ?? []).sorted { ($0.role.sortOrder, $0.name) < ($1.role.sortOrder, $1.name) }
+        app.orderedFolders(for: account.id)
     }
 
     private func folderBinding(_ mb: Mailbox) -> Binding<Bool> {

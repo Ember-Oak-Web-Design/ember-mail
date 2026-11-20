@@ -55,8 +55,8 @@ struct SidebarView: View {
 
             ForEach(app.accounts) { account in
                 Section {
-                    let boxes = app.mailboxes[account.id] ?? []
-                    let primary = boxes.filter { $0.role != .custom }.sorted { $0.role.sortOrder < $1.role.sortOrder }
+                    let boxes = app.orderedFolders(for: account.id)
+                    let primary = boxes.filter { $0.role != .custom }
                     let custom = boxes.filter { $0.role == .custom }
 
                     if boxes.isEmpty {
@@ -72,8 +72,9 @@ struct SidebarView: View {
                             MailboxRow(mailbox: mailbox, unread: app.badgeCount(for: mailbox),
                                        isPoppedUp: !app.isInSimpleView(mailbox))
                                 .tag(SidebarItem.mailbox(mailbox))
-                                .contextMenu { simpleToggle(mailbox) }
+                                .contextMenu { folderMenu(mailbox, in: shown) }
                         }
+                        .onMove { app.moveFolders(in: shown, from: $0, to: $1) }
                         if shown.isEmpty && !boxes.isEmpty {
                             Button("Choose folders…") { choosingFoldersFor = account }
                                 .buttonStyle(.link)
@@ -83,8 +84,9 @@ struct SidebarView: View {
                         ForEach(primary) { mailbox in
                             MailboxRow(mailbox: mailbox, unread: mailbox.role == .inbox ? app.unread[mailbox.id] : app.badgeCount(for: mailbox))
                                 .tag(SidebarItem.mailbox(mailbox))
-                                .contextMenu { simpleToggle(mailbox) }
+                                .contextMenu { folderMenu(mailbox, in: primary) }
                         }
+                        .onMove { app.moveFolders(in: primary, from: $0, to: $1) }
 
                         if !custom.isEmpty {
                             DisclosureGroup(isExpanded: Binding(
@@ -94,8 +96,9 @@ struct SidebarView: View {
                                 ForEach(custom) { mailbox in
                                     MailboxRow(mailbox: mailbox, unread: app.badgeCount(for: mailbox))
                                         .tag(SidebarItem.mailbox(mailbox))
-                                        .contextMenu { simpleToggle(mailbox) }
+                                        .contextMenu { folderMenu(mailbox, in: custom) }
                                 }
+                                .onMove { app.moveFolders(in: custom, from: $0, to: $1) }
                             } label: {
                                 Label(account.kind == .google ? "Labels" : "Folders", systemImage: "folder")
                                     .foregroundStyle(.secondary)
@@ -116,6 +119,8 @@ struct SidebarView: View {
                             .disabled(app.accounts.last?.id == account.id)
                         Divider()
                         Button("Choose Simple View Folders…") { choosingFoldersFor = account }
+                        Button("Reset Folder Order") { withAnimation { app.resetFolderOrder(account.id) } }
+                            .disabled(!app.hasCustomFolderOrder(account.id))
                         Button("Refresh Folders") { Task { await app.refreshMailboxes(account.id) } }
                         Button("Account Settings…") { openSettings() }
                     }
@@ -145,6 +150,19 @@ struct SidebarView: View {
         .sheet(item: $choosingFoldersFor) { account in
             SimpleFoldersSheet(account: account)
         }
+    }
+
+    /// Right-click menu for a folder: reorder (local only) plus the Simple view options.
+    @ViewBuilder
+    private func folderMenu(_ mailbox: Mailbox, in group: [Mailbox]) -> some View {
+        Button("Move Up") { withAnimation { app.moveFolder(mailbox, by: -1, in: group) } }
+            .disabled(group.first == mailbox)
+        Button("Move Down") { withAnimation { app.moveFolder(mailbox, by: 1, in: group) } }
+            .disabled(group.last == mailbox)
+        Button("Reset Folder Order") { withAnimation { app.resetFolderOrder(mailbox.accountID) } }
+            .disabled(!app.hasCustomFolderOrder(mailbox.accountID))
+        Divider()
+        simpleToggle(mailbox)
     }
 
     @ViewBuilder

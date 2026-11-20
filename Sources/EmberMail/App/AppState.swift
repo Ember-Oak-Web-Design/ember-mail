@@ -24,6 +24,8 @@ struct ComposeDraft: Codable, Hashable, Identifiable {
     var bcc = ""
     var subject = ""
     var body = ""
+    /// Formatted body from the rich editor (inline-styled HTML fragment). nil = plain text only.
+    var bodyHTML: String?
     var quoteHeader: String?
     var quotedText: String?
     var inReplyTo: String?
@@ -42,7 +44,7 @@ struct ComposeDraft: Codable, Hashable, Identifiable {
     var contentFingerprint: Int {
         var hasher = Hasher()
         hasher.combine(accountID); hasher.combine(to); hasher.combine(cc); hasher.combine(bcc)
-        hasher.combine(subject); hasher.combine(body); hasher.combine(quotedText)
+        hasher.combine(subject); hasher.combine(body); hasher.combine(bodyHTML); hasher.combine(quotedText)
         hasher.combine(attachments.map(\.id))
         return hasher.finalize()
     }
@@ -487,11 +489,56 @@ final class AppState {
     /// Folders shown for an account in Simple view: chosen ones, plus hidden ones with unread mail,
     /// plus whatever is selected right now (so it doesn't vanish while you read it).
     func simpleMailboxes(for accountID: UUID) -> [Mailbox] {
-        (mailboxes[accountID] ?? []).filter { mb in
+        orderedFolders(for: accountID).filter { mb in
             isInSimpleView(mb) || (canPopUp(mb) && (unread[mb.id] ?? 0) > 0) || selection == .mailbox(mb)
         }
-        .sorted { ($0.role.sortOrder, $0.name) < ($1.role.sortOrder, $1.name) }
     }
+
+    // MARK: - Folder order (local only, never changes the server)
+
+    private static let folderOrderKey = "folderOrder"
+    /// accountID → folder paths in the order you arranged them.
+    private(set) var folderOrder: [String: [String]] =
+        (UserDefaults.standard.dictionary(forKey: AppState.folderOrderKey) as? [String: [String]]) ?? [:]
+
+    /// An account's folders in your order. Folders you haven't placed (e.g. new ones) keep their
+    /// default spot (system folders first, then A–Z) after the ones you have.
+    func orderedFolders(for accountID: UUID) -> [Mailbox] {
+        let base = (mailboxes[accountID] ?? []).sorted {
+            ($0.role.sortOrder, $0.name.lowercased()) < ($1.role.sortOrder, $1.name.lowercased())
+        }
+        guard let order = folderOrder[accountID.uuidString], !order.isEmpty else { return base }
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return base.enumerated()
+            .sorted { (rank[$0.element.path] ?? order.count + $0.offset) < (rank[$1.element.path] ?? order.count + $1.offset) }
+            .map(\.element)
+    }
+
+    /// Reorders `group` (a list as shown in the sidebar) and keeps every other folder where it was.
+    func moveFolders(in group: [Mailbox], from source: IndexSet, to destination: Int) {
+        guard let accountID = group.first?.accountID else { return }
+        var moved = group
+        moved.move(fromOffsets: source, toOffset: destination)
+        let paths = Set(group.map(\.path))
+        var iterator = moved.makeIterator()
+        let full = orderedFolders(for: accountID).map { paths.contains($0.path) ? (iterator.next() ?? $0) : $0 }
+        folderOrder[accountID.uuidString] = full.map(\.path)
+        UserDefaults.standard.set(folderOrder, forKey: Self.folderOrderKey)
+    }
+
+    func moveFolder(_ mailbox: Mailbox, by delta: Int, in group: [Mailbox]) {
+        guard let i = group.firstIndex(of: mailbox) else { return }
+        let target = i + delta
+        guard target >= 0, target < group.count else { return }
+        moveFolders(in: group, from: IndexSet(integer: i), to: delta > 0 ? target + 1 : target)
+    }
+
+    func resetFolderOrder(_ accountID: UUID) {
+        folderOrder[accountID.uuidString] = nil
+        UserDefaults.standard.set(folderOrder, forKey: Self.folderOrderKey)
+    }
+
+    func hasCustomFolderOrder(_ accountID: UUID) -> Bool { folderOrder[accountID.uuidString] != nil }
 
     /// Moves the selection to the next (+1) or previous (-1) conversation in the list.
     func selectAdjacent(_ delta: Int) {
@@ -1270,7 +1317,7 @@ final class AppState {
             subject: draft.subject,
             text: MIMEBuilder.plain(body: draft.body, signature: plainSignature,
                                     quoteHeader: draft.quoteHeader, quotedText: draft.quotedText),
-            html: MIMEBuilder.html(body: draft.body, signature: account.signature, signatureHTML: signatureHTML,
+            html: MIMEBuilder.html(body: draft.body, bodyHTML: draft.bodyHTML, signature: account.signature, signatureHTML: signatureHTML,
                                    quoteHeader: draft.quoteHeader, quotedText: draft.quotedText, pixelURL: pixel),
             inReplyTo: draft.inReplyTo,
             references: draft.references,
@@ -1293,7 +1340,7 @@ final class AppState {
             await removeDraft(ref)
             replacing = nil
         }
-        let meta = DraftMeta(body: draft.body, to: draft.to, cc: draft.cc, bcc: draft.bcc,
+        let meta = DraftMeta(body: draft.body, bodyHTML: draft.bodyHTML, to: draft.to, cc: draft.cc, bcc: draft.bcc,
                              quoteHeader: draft.quoteHeader, quotedText: draft.quotedText,
                              inReplyTo: draft.inReplyTo, references: draft.references, threadID: draft.threadID)
         let message = outgoing(from: draft, account: account, pixel: nil, requestMDN: false)
@@ -1326,7 +1373,7 @@ final class AppState {
         let attachments = body.attachments.map { OutgoingAttachment(filename: $0.filename, mimeType: $0.mimeType, data: $0.data) }
         if let meta = MIMEBuilder.decodeDraftHeader(body.emberDraftMeta) {
             return ComposeDraft(accountID: message.accountID, to: meta.to, cc: meta.cc, bcc: meta.bcc,
-                                subject: message.subject, body: meta.body, quoteHeader: meta.quoteHeader,
+                                subject: message.subject, body: meta.body, bodyHTML: meta.bodyHTML, quoteHeader: meta.quoteHeader,
                                 quotedText: meta.quotedText, inReplyTo: meta.inReplyTo, references: meta.references,
                                 threadID: meta.threadID ?? message.threadID, attachments: attachments, draftRef: ref)
         }

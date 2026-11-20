@@ -1,3 +1,4 @@
+import AppKit
 // Standalone parser tests (no XCTest in Command Line Tools). Run: ./scripts/test.sh
 import Foundation
 
@@ -358,6 +359,32 @@ let inviteMIME = "Content-Type: multipart/alternative; boundary=\"b\"\r\n\r\n--b
 let inviteBody = MessageExtraction.body(from: Data(inviteMIME.utf8))
 expectEqual(inviteBody.invite?.title, "Anne bday at First Light", "invite found in text/calendar part")
 expect(!(inviteBody.text ?? "").contains("BEGIN:VCALENDAR"), "calendar data kept out of body text")
+
+// MARK: Rich text → HTML (compose editor)
+do {
+    let base: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.textColor]
+    let doc = NSMutableAttributedString(string: "Hello ", attributes: base)
+    doc.append(NSAttributedString(string: "bold", attributes: base.merging([.font: NSFont.boldSystemFont(ofSize: 14)]) { $1 }))
+    doc.append(NSAttributedString(string: " and ", attributes: base))
+    doc.append(NSAttributedString(string: "a link", attributes: base.merging([.link: URL(string: "https://example.com/?a=1&b=2")!]) { $1 }))
+    doc.append(NSAttributedString(string: " <tag>\n• one\n• two\n1. first\n\nBig", attributes: base))
+    doc.addAttribute(.font, value: NSFont.systemFont(ofSize: 24), range: NSRange(location: doc.length - 3, length: 3))
+    doc.append(NSAttributedString(string: " red", attributes: base.merging([.foregroundColor: NSColor(red: 0.82, green: 0.18, blue: 0.18, alpha: 1),
+                                                                          .underlineStyle: NSUnderlineStyle.single.rawValue]) { $1 }))
+    let html = RichTextHTML.html(from: doc)
+    expect(html.hasPrefix("<div>Hello <b>bold</b> and <a href=\"https://example.com/?a=1&amp;b=2\""), "rich: bold + escaped link")
+    expect(html.contains("&lt;tag&gt;"), "rich: text escaped")
+    expect(html.contains("<ul style=\"margin:0 0 0 1.2em;padding:0;\"><li>one</li><li>two</li></ul><ol"), "rich: bullet list")
+    expect(html.contains("<li>first</li></ol><div><br></div>"), "rich: numbered list then empty line")
+    expect(html.contains("<span style=\"font-size:24px\">Big</span>"), "rich: font size")
+    expect(html.contains("<span style=\"color:#d12e2e\"><u> red</u></span>"), "rich: colour + underline")
+    expect(!html.contains("color:#000") && !html.contains("Hello <span"), "rich: default colour omitted")
+    expectEqual(RichTextHTML.html(from: NSAttributedString(string: "")), "", "rich: empty")
+    expectEqual(RichTextList.marker(in: "12. x")?.number, 12, "list marker number")
+    expect(RichTextList.marker(in: "1.5 apples") == nil, "not a list marker")
+    let built = MIMEBuilder.html(body: "plain", bodyHTML: "<div><b>rich</b></div>", signature: "", quoteHeader: nil, quotedText: nil, pixelURL: nil)
+    expect(built.contains("<b>rich</b>") && !built.contains(">plain<"), "builder uses rich body when present")
+}
 
 print("\(passes) passed, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

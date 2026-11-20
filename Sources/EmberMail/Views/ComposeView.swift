@@ -26,6 +26,7 @@ struct ComposeView: View {
     @State private var finished = false
     @State private var confirmDiscard = false
     @FocusState private var focus: Field?
+    @State private var rich = RichTextController()
 
     private enum Field { case to, subject, body }
 
@@ -45,6 +46,8 @@ struct ComposeView: View {
     var body: some View {
         VStack(spacing: 0) {
             fields
+            Divider()
+            FormatBar(controller: rich)
             Divider()
             editor
             if !draft.attachments.isEmpty {
@@ -127,7 +130,7 @@ struct ComposeView: View {
         .onAppear {
             trackOpens = trackByDefault
             if draft.accountID == nil { draft.accountID = app.defaultAccountID() }
-            focus = draft.to.isEmpty ? .to : .body
+            if draft.to.isEmpty { focus = .to }
         }
         // Autosave every 10 seconds while the message is being written.
         .task {
@@ -202,12 +205,8 @@ struct ComposeView: View {
     private var editor: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                TextEditor(text: $draft.body)
-                    .font(.system(size: 14))
-                    .scrollContentBackground(.hidden)
-                    .scrollDisabled(true)
-                    .frame(minHeight: 180)
-                    .focused($focus, equals: .body)
+                RichTextEditor(text: $draft.body, html: $draft.bodyHTML, controller: rich,
+                               autoFocus: !draft.to.isEmpty)
 
                 if let account, account.hasHTMLSignature {
                     MessageBodyView(html: account.signaturePreviewHTML, isPlainText: false,

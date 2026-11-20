@@ -54,7 +54,10 @@ struct EmberMailApp: App {
                 .task { await app.bootstrap() }
         }
         .defaultSize(width: 1280, height: 820)
-        .commands { MailCommands(app: app) }
+        .commands {
+            MailCommands(app: app)
+            TextFormattingCommands()   // Format → Font / Text (⌘B, ⌘I, ⌘U, Show Fonts…) for the compose editor
+        }
 
         WindowGroup("New Message", id: "compose", for: ComposeDraft.self) { $draft in
             ComposeView(draft: draft ?? ComposeDraft(accountID: app.defaultAccountID()))

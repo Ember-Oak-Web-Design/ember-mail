@@ -130,11 +130,11 @@ enum MIMEBuilder {
     static let bodyFont = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
 
     /// Builds the HTML part from the user's plain text, signature and quoted original.
-    static func html(body: String, signature: String, signatureHTML: String? = nil, quoteHeader: String?, quotedText: String?, pixelURL: URL?) -> String {
+    static func html(body: String, bodyHTML: String? = nil, signature: String, signatureHTML: String? = nil, quoteHeader: String?, quotedText: String?, pixelURL: URL?) -> String {
         var html = """
         <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
         <body style="font-family:\(bodyFont);font-size:14px;line-height:1.55;color:#1f2328;">
-        <div>\(HTMLText.fromPlainText(body))</div>
+        <div>\(bodyHTML.flatMap { $0.isEmpty ? nil : $0 } ?? HTMLText.fromPlainText(body))</div>
         """
         if let signatureHTML, !signatureHTML.isEmpty {
             html += "\n<div class=\"ember_signature\" style=\"margin-top:18px;\">\(signatureHTML)</div>"
